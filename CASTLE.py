@@ -89,13 +89,19 @@ class CASTLE(object):
         self.Out_0 = []
         
         # Mask removes the feature i from the network that is tasked to construct feature i
+        # So the NN won't see the feature i, which is cheating
         self.mask = {}
         self.activation = tf.nn.relu
             
         for i in range(self.num_inputs):
             indices = [i]*self.n_hidden
             self.mask[str(i)] = tf.transpose(tf.one_hot(indices, depth=self.num_inputs, on_value=0.0, off_value=1.0, axis=-1))
-            
+            # if i == 0 and num_inputs == 3, self.maks will be:
+            # [[0, 1, 1,],
+            #  [0, 1, 1,],
+            #  [0, 1, 1]]
+
+            # 3-layer fully connected
             self.weights['w_h0_'+str(i)] = self.weights['w_h0_'+str(i)]*self.mask[str(i)] 
             self.hidden_h0['nn_'+str(i)] = self.activation(tf.add(tf.matmul(self.X, self.weights['w_h0_'+str(i)]), self.biases['b_h0_'+str(i)]))
             self.hidden_h1['nn_'+str(i)] = self.activation(tf.add(tf.matmul(self.hidden_h0['nn_'+str(i)], self.weights['w_h1']), self.biases['b_h1']))
@@ -103,21 +109,27 @@ class CASTLE(object):
             self.Out_0.append(self.out_layer['nn_'+str(i)])
         
         # Concatenate all the constructed features
+        # self.Out is expected to be the same as X_DAG (input data)
         self.Out = tf.concat(self.Out_0,axis=1)
         self.optimizer_subset = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-           
+
+        # Sum over features, mean over samples
         self.supervised_loss = tf.reduce_mean(tf.reduce_sum(tf.square(self.out_layer['nn_0'] - self.y),axis=1),axis=0)
         self.regularization_loss = 0
 
+        # L2 regularization on causal graph edges
+        # Each W_0 is of size (num_inputs, 1)
         self.W_0 = []
         for i in range(self.num_inputs):
             self.W_0.append(tf.math.sqrt(tf.reduce_sum(tf.square(self.weights['w_h0_'+str(i)]),axis=1,keepdims=True)))
-        
+        # W is of size (num_inputs, num_inputs)
         self.W = tf.concat(self.W_0,axis=1)
-               
+
+        # ------ DAG Loss ------
         #truncated power series
         d = tf.cast(self.X.shape[1], tf.float32)
-        coff = 1.0 
+        coff = 1.0
+        # Element-wise W * W
         Z = tf.multiply(self.W,self.W)
        
         dag_l = tf.cast(d, tf.float32) 
@@ -126,15 +138,16 @@ class CASTLE(object):
         for i in range(1,10):
            
             Z_in = tf.matmul(Z_in, Z)
-           
+            # trace of a matrix is the sum of elements on its diagonal
             dag_l += 1./coff * tf.linalg.trace(Z_in)
-            coff = coff * (i+1)
+            coff = coff * (i+1)  # factorial of 10
         
         self.h = dag_l - tf.cast(d, tf.float32)
-
-        # Residuals
+        # ----------------------
+        
+        # Residuals (reconstruction loss)
         self.R = self.X - self.Out 
-        # Average reconstruction loss
+        # Average reconstruction loss （MSE）
         self.average_loss = 0.5 / num_train * tf.reduce_sum(tf.square(self.R))
 
 
